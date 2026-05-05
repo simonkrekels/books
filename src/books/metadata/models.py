@@ -30,6 +30,7 @@ class PaperMatch(BaseModel):
     source: str
     doi: str | None = None
     arxiv_id: str | None = None
+    isbn: str | None = None
     title: str
     authors: list[Author] = Field(default_factory=list)
     year: int | None = None

@@ -24,7 +24,7 @@ from rich.console import Console
 from rich.table import Table
 
 from books import config, db, interactive, paths
-from books.metadata import arxiv, crossref
+from books.metadata import arxiv, crossref, openlibrary
 from books.metadata.models import PaperMatch
 from books.metadata.pdf_meta import sniff_pdf
 
@@ -149,7 +149,7 @@ def _import_one(pdf: Path, *, quiet: bool, mode: str) -> ImportOutcome:
 
     # 2-3. Sniff identifiers and look up canonical metadata.
     sniff = sniff_pdf(pdf)
-    match = _lookup(sniff.doi, sniff.arxiv_id)
+    match = _lookup(sniff.doi, sniff.arxiv_id, sniff.isbn)
 
     # 4. Either prompt the user, or short-circuit (quiet mode).
     if match is None:
@@ -243,25 +243,39 @@ def _index_post_commit(paper_id: int, pdf_path: Path, match: PaperMatch) -> None
             pass
 
 
-def _lookup(doi: str | None, arxiv_id: str | None) -> PaperMatch | None:
+def _lookup(
+    doi: str | None, arxiv_id: str | None, isbn: str | None
+) -> PaperMatch | None:
     """Try the available metadata sources in priority order.
 
-    Crossref is preferred over arXiv because it returns canonical published
-    metadata (journal, publisher, etc.) that arXiv doesn't carry. We fall
-    back to arXiv when the DOI is missing or Crossref returns 404.
+    Crossref (DOI) is preferred because it carries the richest published
+    metadata. arXiv is the natural fallback for preprints. Open Library
+    (ISBN) covers books that don't show up in either, and is also useful
+    when the DOI lookup 404s on a book DOI.
     """
     if doi:
         try:
             match = crossref.lookup(doi)
             if match is not None:
+                # Carry the sniffed ISBN through so it gets persisted even
+                # when Crossref didn't volunteer it.
+                if match.isbn is None and isbn:
+                    match.isbn = isbn
                 return match
         except Exception as e:
             console.print(f"[yellow]crossref lookup failed:[/yellow] {e}")
     if arxiv_id:
         try:
-            return arxiv.lookup(arxiv_id)
+            match = arxiv.lookup(arxiv_id)
+            if match is not None:
+                return match
         except Exception as e:
             console.print(f"[yellow]arxiv lookup failed:[/yellow] {e}")
+    if isbn:
+        try:
+            return openlibrary.lookup(isbn)
+        except Exception as e:
+            console.print(f"[yellow]open library lookup failed:[/yellow] {e}")
     return None
 
 

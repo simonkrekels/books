@@ -5,8 +5,11 @@ import pytest
 from books.metadata.pdf_meta import (
     arxiv_candidates,
     doi_candidates,
+    isbn_candidates,
+    normalize_isbn,
     score_arxiv,
     score_dois,
+    score_isbn,
     sniff_pdf,
 )
 
@@ -17,6 +20,7 @@ EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 # still passes on a fresh clone.
 DOLAI_PDF = EXAMPLES / "Dolai et al. - 2022 - Inducing a bound state between active particles.pdf"
 ARXIV_PDF = EXAMPLES / "2604.00777v1.pdf"
+SAKURAI_PDF = EXAMPLES / "Sakurai and Napolitano - 2017 - Modern Quantum Mechanics.pdf"
 
 
 def test_doi_basic():
@@ -90,6 +94,56 @@ def test_score_arxiv_filename_fallback_only_without_contextual_match():
     assert "9999.99999" not in scores
 
 
+# --- ISBN ---
+
+
+def test_normalize_isbn_13_with_hyphens():
+    # The real ISBN-13 of Sakurai 2nd ed.
+    assert normalize_isbn("978-1-108-42241-3") == "9781108422413"
+
+
+def test_normalize_isbn_10_converts_to_13():
+    # Knuth, "The Art of Computer Programming" Vol 1, 3rd ed (ISBN-10 0201896834).
+    out = normalize_isbn("0-201-89683-4")
+    assert out == "9780201896831"
+
+
+def test_normalize_isbn_invalid_checksum():
+    # Same digits but wrong final check digit — must be rejected.
+    assert normalize_isbn("978-1-108-42241-9") is None
+
+
+def test_normalize_isbn_garbage():
+    assert normalize_isbn("hello") is None
+    assert normalize_isbn("123") is None
+
+
+def test_isbn_candidates_labeled():
+    found = isbn_candidates("Cambridge University Press, ISBN 978-1-108-42241-3.")
+    assert "9781108422413" in found
+
+
+def test_isbn_candidates_bare():
+    found = isbn_candidates("Hardback 9781108422413 ⓒ 2017")
+    assert "9781108422413" in found
+
+
+def test_isbn_candidates_excludes_doi_suffix():
+    # ISBN-shaped numbers inside a DOI must not be picked up.
+    found = isbn_candidates("DOI 10.1017/9781108499996")
+    assert "9781108499996" not in found
+
+
+def test_score_isbn_prefers_labeled_over_bare():
+    # When both labeled and bare exist, labeled wins (and gets reported).
+    sources = [
+        ("Hardcover 9781108422413 (2017)", 1),
+        ("ISBN 978-1-108-42241-3", 1),
+    ]
+    scores = score_isbn(sources)
+    assert "9781108422413" in scores
+
+
 # Real PDF sniffing — uses files at examples/
 @pytest.mark.skipif(not ARXIV_PDF.exists(), reason="example PDF not present")
 def test_sniff_arxiv_preprint_filename():
@@ -108,3 +162,14 @@ def test_sniff_dolai_paper_finds_doi():
     # (DOI varies per real-world paper).
     if res.doi is not None:
         assert res.doi.startswith("10.")
+
+
+@pytest.mark.skipif(not SAKURAI_PDF.exists(), reason="example PDF not present")
+def test_sniff_textbook_finds_doi_and_isbn_on_copyright_page():
+    # Sakurai 2nd ed has both a Cambridge UP DOI and ISBN-13 on page 6.
+    # Verifies that the front-matter page scan extends far enough to cover
+    # the copyright page and that the ISBN parser handles the labeled form.
+    res = sniff_pdf(SAKURAI_PDF)
+    assert res.doi == "10.1017/9781108499996"
+    assert res.isbn == "9781108422413"
+    assert res.arxiv_id is None

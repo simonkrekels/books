@@ -16,15 +16,16 @@ from typing import Iterator
 from books import config
 from books.metadata.models import Author, PaperMatch
 
-# Bumped manually whenever schema changes; mismatches raise — migrations are
-# not implemented yet (this is v0.1).
-SCHEMA_VERSION = 1
+# Bumped on schema changes; the lightweight migration in `init_db` brings
+# older DBs forward. v1 → v2 added the `isbn` column.
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS papers (
   id INTEGER PRIMARY KEY,
   doi TEXT UNIQUE,
   arxiv_id TEXT UNIQUE,
+  isbn TEXT,                      -- ISBN-13 (canonical form, no hyphens)
   title TEXT NOT NULL,
   year INTEGER,
   journal TEXT,
@@ -71,34 +72,58 @@ CREATE TABLE IF NOT EXISTS schema_version (
 def init_db(path: Path | None = None) -> None:
     """Create or upgrade the SQLite database at ``path`` (defaults to config).
 
-    Idempotent: re-running on an initialized DB is a no-op. Raises if the
-    on-disk schema version does not match :data:`SCHEMA_VERSION` (no
-    migrations are defined yet).
+    Idempotent: re-running on an initialized DB is a no-op. Applies in-place
+    migrations for older schema versions where the change is non-destructive
+    (additive columns + indexes only).
     """
     target = path or config.db_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     with _raw_connect(target) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         cur = conn.execute("SELECT version FROM schema_version LIMIT 1")
         row = cur.fetchone()
         if row is None:
             conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
         elif row["version"] != SCHEMA_VERSION:
-            raise RuntimeError(
-                f"db schema version {row['version']} != expected {SCHEMA_VERSION}; "
-                "no migrations defined yet"
-            )
+            conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply any in-place column/index additions to existing DBs.
+
+    SQLite ``CREATE TABLE IF NOT EXISTS`` does not add columns to a table
+    that already exists, so for additive schema changes we have to detect
+    the missing column and ``ALTER TABLE ADD COLUMN`` ourselves. Indexes
+    that depend on migrated columns must be created here (after the
+    column-add) rather than in :data:`SCHEMA`, otherwise the SCHEMA execute
+    fails before the migration runs on legacy DBs.
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(papers)")}
+    if "isbn" not in cols:
+        # Cannot add a UNIQUE column via ALTER TABLE in SQLite — the partial
+        # unique index below enforces uniqueness once the column exists.
+        conn.execute("ALTER TABLE papers ADD COLUMN isbn TEXT")
+    # Partial unique index: enforce uniqueness when ISBN is set, allow many
+    # rows with NULL (the common case for non-book imports). IF NOT EXISTS
+    # makes this idempotent across connects.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uniq_papers_isbn "
+        "ON papers(isbn) WHERE isbn IS NOT NULL"
+    )
 
 
 @contextmanager
 def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
-    """Yield a configured sqlite3.Connection. Initialises the DB on first use.
+    """Yield a configured sqlite3.Connection. Initialises / migrates the DB.
 
+    ``init_db`` is idempotent (CREATE IF NOT EXISTS + a column-level migration
+    pass), so we run it on every connect. This guarantees existing DBs pick
+    up additive schema changes without an explicit migrate command.
     The connection commits on clean exit and rolls back on exceptions.
     """
     target = path or config.db_path()
-    if not target.exists():
-        init_db(target)
+    init_db(target)
     with _raw_connect(target) as conn:
         yield conn
 
@@ -137,13 +162,14 @@ def insert_paper(
     cur = conn.execute(
         """
         INSERT INTO papers
-          (doi, arxiv_id, title, year, journal, publisher, abstract, type,
+          (doi, arxiv_id, isbn, title, year, journal, publisher, abstract, type,
            file_path, source_pdf_hash, imported_at, needs_reindex, metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
         """,
         (
             match.doi,
             match.arxiv_id,
+            match.isbn,
             match.title,
             match.year,
             match.journal,
@@ -209,16 +235,26 @@ def find_by_arxiv(conn: sqlite3.Connection, arxiv_id: str) -> sqlite3.Row | None
     ).fetchone()
 
 
+def find_by_isbn(conn: sqlite3.Connection, isbn: str) -> sqlite3.Row | None:
+    """Look up a paper by exact ISBN-13."""
+    return conn.execute("SELECT * FROM papers WHERE isbn = ?", (isbn,)).fetchone()
+
+
 def get_paper(conn: sqlite3.Connection, ident: str) -> sqlite3.Row | None:
     """Resolve an identifier to a paper row.
 
-    Tries ``id`` (if numeric), then DOI, then arXiv ID. Returns None if none match.
+    Tries ``id`` (if numeric), then DOI, then arXiv ID, then ISBN.
+    Returns None if none match.
     """
     if ident.isdigit():
         row = conn.execute("SELECT * FROM papers WHERE id = ?", (int(ident),)).fetchone()
         if row is not None:
             return row
-    return find_by_doi(conn, ident) or find_by_arxiv(conn, ident)
+    return (
+        find_by_doi(conn, ident)
+        or find_by_arxiv(conn, ident)
+        or find_by_isbn(conn, ident)
+    )
 
 
 def get_authors(conn: sqlite3.Connection, paper_id: int) -> list[sqlite3.Row]:

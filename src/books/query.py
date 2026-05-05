@@ -15,6 +15,7 @@ def build_papers_query(
     journal: str | None = None,
     tag: str | None = None,
     doi: str | None = None,
+    isbn: str | None = None,
 ) -> tuple[str, list[Any]]:
     """Build a parameterized SELECT for the papers table.
 
@@ -45,6 +46,9 @@ def build_papers_query(
     if doi:
         where.append("p.doi = ?")
         params.append(doi)
+    if isbn:
+        where.append("p.isbn = ?")
+        params.append(isbn)
     for term in terms or []:
         where.append("(p.title LIKE ? OR p.abstract LIKE ?)")
         like = f"%{term}%"

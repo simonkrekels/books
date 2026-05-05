@@ -16,6 +16,7 @@ def run(
     journal: str = typer.Option(None, "--journal", help="Filter by journal."),
     tag: str = typer.Option(None, "--tag", help="Filter by tag."),
     doi: str = typer.Option(None, "--doi", help="Filter by DOI."),
+    isbn: str = typer.Option(None, "--isbn", help="Filter by ISBN-13."),
 ) -> None:
     """List papers in the library.
 
@@ -30,6 +31,7 @@ def run(
         journal=journal,
         tag=tag,
         doi=doi,
+        isbn=isbn,
     )
     with db.connect() as conn:
         rows = list(conn.execute(sql, params))
@@ -54,7 +56,7 @@ def run(
         names = ", ".join(a["family_name"] for a in authors[:3])
         if len(authors) > 3:
             names += f" +{len(authors) - 3}"
-        source = r["doi"] or r["arxiv_id"] or ""
+        source = r["doi"] or r["arxiv_id"] or r["isbn"] or ""
         table.add_row(
             str(r["id"]),
             str(r["year"] or ""),

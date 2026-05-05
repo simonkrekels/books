@@ -35,6 +35,7 @@ def run(ident: str = typer.Argument(..., help="Paper id or DOI.")) -> None:
     fields.add_row("journal", row["journal"] or "")
     fields.add_row("doi", row["doi"] or "")
     fields.add_row("arxiv", row["arxiv_id"] or "")
+    fields.add_row("isbn", row["isbn"] or "")
     fields.add_row("type", row["type"] or "")
     fields.add_row("file", str(config.library_dir() / row["file_path"]))
     fields.add_row("imported", row["imported_at"])

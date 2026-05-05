@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+
+# Virtual environment
+.venv/
+
+# IDE / editors
+.vscode/
+.idea/
+.DS_Store
+
+# Test fixture PDFs not committed (large or copyrighted)
+/examples/Sakurai and Napolitano - 2017 - Modern Quantum Mechanics.pdf
+/examples/Dolai et al. - 2022 - Inducing a bound state between active particles.pdf
+/examples/.DS_Store
+
+# Local model / index caches if a user puts the library inside the repo
+/library/

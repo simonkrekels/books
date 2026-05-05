@@ -1,0 +1,19 @@
+library_dir: ~/Documents/papers
+db_path: ~/.local/share/book/library.db
+chroma_dir: ~/.local/share/book/chroma
+
+import:
+  mode: copy            # copy | move | symlink
+  path_template: "{author_last}/{year}/{title_slug}.pdf"
+
+metadata:
+  sources: [crossref, arxiv]
+  crossref_mailto: simonkrekels@gmail.com
+  user_agent: "book/0.1 (mailto:simonkrekels@gmail.com)"
+
+index:
+  embedder: sentence-transformers
+  model: BAAI/bge-small-en-v1.5
+  chunk_tokens: 512
+  chunk_overlap: 64
+  device: cpu           # cpu | mps | cuda

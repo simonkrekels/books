@@ -17,3 +17,7 @@ index:
   chunk_tokens: 512
   chunk_overlap: 64
   device: cpu           # cpu | mps | cuda
+  # When true, never hit HuggingFace Hub: no auth warning, no progress
+  # bars, no version checks. The chosen model must already be cached
+  # (run once with offline:false to download, then flip this on).
+  offline: false

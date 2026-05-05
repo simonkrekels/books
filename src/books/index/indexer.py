@@ -5,6 +5,7 @@ query-time workflow (search). The embedder is cached as a module-level
 singleton because loading the model is the dominant cost when batch-importing.
 """
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,12 +25,29 @@ def get_embedder() -> "Embedder":
     The first call is expensive (loads the model from disk / HuggingFace).
     Subsequent calls are O(1) and reuse the loaded model. This singleton is
     intentional: we want batch imports to share the loaded weights.
+
+    When ``index.offline`` is set, we apply the corresponding environment
+    variables *before* importing the embedder module so the underlying HF
+    libraries see them at import time.
     """
     global _EMBEDDER
     if _EMBEDDER is None:
+        offline = config.embedder_offline()
+        if offline:
+            # setdefault so an already-set env var (user's shell preference)
+            # still wins. Set all three: HF_HUB_OFFLINE covers huggingface_hub,
+            # TRANSFORMERS_OFFLINE covers transformers, and the progress-bar
+            # var silences the per-load tqdm output.
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
         from books.index.embedder import make_embedder
 
-        _EMBEDDER = make_embedder(config.embedder_model(), config.embedder_device())
+        _EMBEDDER = make_embedder(
+            config.embedder_model(),
+            config.embedder_device(),
+            offline=offline,
+        )
     return _EMBEDDER
 
 

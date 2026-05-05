@@ -80,3 +80,8 @@ def chunk_overlap() -> int:
 def embedder_device() -> str:
     """Torch device string for the embedder: ``cpu``, ``mps``, or ``cuda``."""
     return config["index"]["device"].as_str()
+
+
+def embedder_offline() -> bool:
+    """If true, never contact HuggingFace Hub — use only cached weights."""
+    return bool(config["index"]["offline"].get(bool))

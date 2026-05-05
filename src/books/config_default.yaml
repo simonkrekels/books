@@ -3,7 +3,7 @@ db_path: ~/.local/share/book/library.db
 chroma_dir: ~/.local/share/book/chroma
 
 import:
-  mode: copy            # copy | move | symlink
+  mode: move            # copy | move | symlink
   path_template: "{author_last}/{year}/{title_slug}.pdf"
 
 metadata:

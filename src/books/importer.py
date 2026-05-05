@@ -84,20 +84,28 @@ class ImportSummary:
         console.print(table)
 
 
-def import_paths(paths_in: list[Path], *, quiet: bool = False) -> ImportSummary:
+def import_paths(
+    paths_in: list[Path],
+    *,
+    quiet: bool = False,
+    mode_override: str | None = None,
+) -> ImportSummary:
     """Import every PDF reachable from ``paths_in``.
 
     Each entry may be a PDF file or a directory (recursed for ``*.pdf``).
     In ``quiet`` mode no prompts appear: top matches are auto-applied; PDFs
-    without a confident DOI/arXiv ID are skipped.
+    without a confident DOI/arXiv ID are skipped. ``mode_override`` (one of
+    ``copy``/``move``/``symlink``) takes precedence over ``config.import_mode``
+    for this invocation only.
     """
     summary = ImportSummary()
     pdfs = _expand_paths(paths_in)
     if not pdfs:
         console.print("[yellow]no PDFs found[/yellow]")
         return summary
+    mode = mode_override or config.import_mode()
     for pdf in pdfs:
-        outcome = _import_one(pdf, quiet=quiet)
+        outcome = _import_one(pdf, quiet=quiet, mode=mode)
         summary.record(outcome)
         # Honour the user's [Q]uit choice — stop the whole batch.
         if outcome.status == "quit":
@@ -118,7 +126,7 @@ def _expand_paths(paths_in: list[Path]) -> list[Path]:
     return out
 
 
-def _import_one(pdf: Path, *, quiet: bool) -> ImportOutcome:
+def _import_one(pdf: Path, *, quiet: bool, mode: str) -> ImportOutcome:
     """Process a single PDF end-to-end. Returns the outcome dataclass.
 
     The function is intentionally linear (no early returns from sub-helpers)
@@ -177,7 +185,6 @@ def _import_one(pdf: Path, *, quiet: bool) -> ImportOutcome:
     if dest.exists():
         return ImportOutcome(pdf, "failed", f"target file exists: {dest}")
 
-    mode = config.import_mode()
     try:
         paths.place_pdf(pdf, dest, mode)
     except OSError as e:

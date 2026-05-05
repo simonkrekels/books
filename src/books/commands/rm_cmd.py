@@ -10,13 +10,17 @@ console = Console()
 
 def run(
     ident: str = typer.Argument(..., help="Paper id or DOI."),
-    keep_file: bool = typer.Option(False, "--keep-file", help="Leave the PDF on disk."),
+    keep_file: bool = typer.Option(
+        True,
+        "--keep-file/--delete-file",
+        help="Leave the PDF on disk (default) or also delete it.",
+    ),
 ) -> None:
     """Remove a paper from the library.
 
-    Drops the SQLite row (cascading author / tag links), deletes Chroma
-    chunks, and — unless ``--keep-file`` is given — deletes the PDF file
-    from the on-disk library.
+    Drops the SQLite row (cascading author / tag links) and deletes Chroma
+    chunks. By default the PDF file on disk is left in place — pass
+    ``--delete-file`` to remove it as well.
     """
     with db.connect() as conn:
         row = db.get_paper(conn, ident)

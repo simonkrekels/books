@@ -21,3 +21,4 @@ index:
   # bars, no version checks. The chosen model must already be cached
   # (run once with offline:false to download, then flip this on).
   offline: false
+  hybrid: true              # fuse BM25 (SQLite FTS5) with cosine search

@@ -85,3 +85,8 @@ def embedder_device() -> str:
 def embedder_offline() -> bool:
     """If true, never contact HuggingFace Hub — use only cached weights."""
     return bool(config["index"]["offline"].get(bool))
+
+
+def hybrid_search() -> bool:
+    """If true, fuse BM25 (FTS5) with cosine similarity at search time."""
+    return bool(config["index"]["hybrid"].get(bool))

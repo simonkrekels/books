@@ -29,6 +29,10 @@ def run(
             raise typer.Exit(code=1)
         paper_id = int(row["id"])
         file_path = config.library_dir() / row["file_path"]
+        # FTS cleanup must happen before paper deletion so the chunks rows
+        # are still accessible (they cascade-delete with the paper row).
+        from books.index.fts import delete_paper as fts_delete
+        fts_delete(conn, paper_id)
         db.delete_paper(conn, paper_id)
 
     # Best-effort Chroma cleanup. If Chroma isn't reachable (e.g. corrupt

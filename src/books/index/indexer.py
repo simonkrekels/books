@@ -74,6 +74,7 @@ def index_paper(
     from books.index.chroma import ChromaIndex
     from books.index.chunker import chunk_pages
     from books.index.extract import extract_text
+    from books.index.fts import upsert_paper as fts_upsert
 
     pages = extract_text(pdf_path)
     chunks = chunk_pages(
@@ -95,12 +96,22 @@ def index_paper(
         title=title,
         doi=doi,
     )
+
+    from books import db
+    with db.connect() as conn:
+        fts_upsert(conn, paper_id, chunks)
+
     return len(chunks)
 
 
 def delete_paper_chunks(paper_id: int) -> None:
-    """Remove every Chroma chunk for ``paper_id``. Safe to call on absent papers."""
+    """Remove Chroma and FTS chunks for ``paper_id``. Safe on absent papers."""
     from books.index.chroma import ChromaIndex
+    from books.index.fts import delete_paper as fts_delete
 
     index = ChromaIndex(config.chroma_dir())
     index.delete_paper(paper_id)
+
+    from books import db
+    with db.connect() as conn:
+        fts_delete(conn, paper_id)

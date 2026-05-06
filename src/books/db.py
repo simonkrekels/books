@@ -18,7 +18,7 @@ from books.metadata.models import Author, PaperMatch
 
 # Bumped on schema changes; the lightweight migration in `init_db` brings
 # older DBs forward. v1 → v2 added the `isbn` column.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS papers (
@@ -66,6 +66,24 @@ CREATE TABLE IF NOT EXISTS tags (
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
+
+-- Chunk text store: source of truth for BM25 / text retrieval.
+-- chunk_index is 0-based position within the paper (matches Chroma's IDs).
+CREATE TABLE IF NOT EXISTS chunks (
+  id          INTEGER PRIMARY KEY,
+  paper_id    INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,
+  page        INTEGER NOT NULL,
+  text        TEXT    NOT NULL,
+  UNIQUE(paper_id, chunk_index)
+);
+
+-- FTS5 full-text index over chunks.text; rowid mirrors chunks.id.
+-- porter stemmer + unicode61 tokenizer gives broad-coverage BM25 search.
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  text,
+  tokenize = 'porter unicode61'
+);
 """
 
 
@@ -111,6 +129,29 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS uniq_papers_isbn "
         "ON papers(isbn) WHERE isbn IS NOT NULL"
     )
+    # v3: chunks + chunks_fts. CREATE TABLE IF NOT EXISTS in SCHEMA handles
+    # new installations; here we handle existing DBs that pre-date v3.
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table','shadow')")
+    }
+    if "chunks" not in tables:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS chunks (
+              id          INTEGER PRIMARY KEY,
+              paper_id    INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+              chunk_index INTEGER NOT NULL,
+              page        INTEGER NOT NULL,
+              text        TEXT    NOT NULL,
+              UNIQUE(paper_id, chunk_index)
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+              text,
+              tokenize = 'porter unicode61'
+            );
+            """
+        )
 
 
 @contextmanager

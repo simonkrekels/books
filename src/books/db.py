@@ -282,6 +282,29 @@ def get_tags(conn: sqlite3.Connection, paper_id: int) -> list[str]:
     ]
 
 
+def add_tag(conn: sqlite3.Connection, paper_id: int, tag: str) -> None:
+    """Add a tag to a paper. Silently ignores duplicates."""
+    conn.execute(
+        "INSERT OR IGNORE INTO tags(paper_id, tag) VALUES (?, ?)", (paper_id, tag)
+    )
+
+
+def remove_tag(conn: sqlite3.Connection, paper_id: int, tag: str) -> None:
+    """Remove a tag from a paper. No-op if the tag does not exist."""
+    conn.execute(
+        "DELETE FROM tags WHERE paper_id = ? AND tag = ?", (paper_id, tag)
+    )
+
+
+def list_all_tags(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return all distinct tags with paper counts, sorted alphabetically."""
+    return list(
+        conn.execute(
+            "SELECT tag, COUNT(*) AS count FROM tags GROUP BY tag ORDER BY tag"
+        )
+    )
+
+
 def delete_paper(conn: sqlite3.Connection, paper_id: int) -> None:
     """Delete a paper. Cascades remove its author links and tags."""
     conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))

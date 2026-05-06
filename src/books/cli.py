@@ -4,12 +4,14 @@ into the ``book`` CLI. Subcommand bodies live in :mod:`books.commands.*`."""
 import typer
 
 from books.commands import (
+    bibtex_cmd,
     import_cmd,
     ls_cmd,
     reindex_cmd,
     rm_cmd,
     search_cmd,
     show_cmd,
+    tag_cmd,
 )
 
 app = typer.Typer(
@@ -26,3 +28,5 @@ app.command("show")(show_cmd.run)
 app.command("rm")(rm_cmd.run)
 app.command("search")(search_cmd.run)
 app.command("reindex")(reindex_cmd.run)
+app.command("bibtex")(bibtex_cmd.run)
+app.add_typer(tag_cmd.app, name="tag")

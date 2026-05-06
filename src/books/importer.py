@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rich.console import Console
+from rich.prompt import Prompt
 from rich.table import Table
 
 from books import config, db, interactive, paths
@@ -155,25 +156,68 @@ def _import_one(pdf: Path, *, quiet: bool, mode: str) -> ImportOutcome:
     if match is None:
         if quiet:
             return ImportOutcome(pdf, "skipped", "no DOI/arXiv match found")
-        action = interactive.no_match_prompt(pdf, sniff)
-        if action == "quit":
-            return ImportOutcome(pdf, "quit")
-        if action == "skip":
-            return ImportOutcome(pdf, "skipped")
-        match = interactive.manual_doi_lookup(sniff.doi)
-        if match is None:
-            return ImportOutcome(pdf, "skipped", "manual lookup abandoned")
-    elif not quiet:
-        decision = interactive.confirm_match(pdf, match)
-        if decision == "quit":
-            return ImportOutcome(pdf, "quit")
-        if decision == "skip":
-            return ImportOutcome(pdf, "skipped")
-        if decision == "manual":
-            replacement = interactive.manual_doi_lookup(match.doi)
-            if replacement is None:
-                return ImportOutcome(pdf, "skipped", "manual lookup abandoned")
-            match = replacement
+        # Loop until the user produces a valid match or gives up.
+        while match is None:
+            action = interactive.no_match_prompt(pdf, sniff)
+            if action == "quit":
+                return ImportOutcome(pdf, "quit")
+            if action == "skip":
+                return ImportOutcome(pdf, "skipped")
+            if action == "retry":
+                match = _lookup(sniff.doi, sniff.arxiv_id, sniff.isbn)
+                if match is None:
+                    console.print("[yellow]still no match — try another option[/yellow]")
+                continue
+            if action == "use_pdf":
+                match = interactive.build_match_from_pdf_meta(sniff)
+                if match is None:
+                    console.print("[yellow]PDF has no embedded title — try manual entry[/yellow]")
+                continue
+            if action == "manual_entry":
+                match = interactive.manual_entry_form()
+                continue
+            if action == "manual_doi":
+                match = interactive.manual_doi_lookup(sniff.doi)
+                continue
+        # Guard: should never exit the loop with match still None, but be safe.
+        if match is None:  # pragma: no cover
+            return ImportOutcome(pdf, "skipped", "no metadata resolved")
+    else:
+        # Early duplicate check: warn before bothering the user with a prompt.
+        with db.connect() as conn:
+            dup = None
+            if match.doi:
+                dup = db.find_by_doi(conn, match.doi)
+            if dup is None and match.arxiv_id:
+                dup = db.find_by_arxiv(conn, match.arxiv_id)
+        if dup is not None:
+            console.print(
+                f"[yellow]duplicate:[/yellow] {match.title!r} already imported as id={dup['id']}"
+            )
+            if quiet:
+                return ImportOutcome(
+                    pdf, "duplicate", f"same DOI/arXiv as id={dup['id']}", paper_id=int(dup["id"])
+                )
+            choice = Prompt.ask(
+                "[bold cyan]Import anyway? [Y]es / [S]kip[/bold cyan]",
+                choices=["y", "s"],
+                default="s",
+                show_choices=False,
+            )
+            if choice == "s":
+                return ImportOutcome(pdf, "skipped", f"duplicate DOI/arXiv, user skipped (existing id={dup['id']})")
+
+        if not quiet:
+            decision = interactive.confirm_match(pdf, match)
+            if decision == "quit":
+                return ImportOutcome(pdf, "quit")
+            if decision == "skip":
+                return ImportOutcome(pdf, "skipped")
+            if decision == "manual":
+                replacement = interactive.manual_doi_lookup(match.doi)
+                if replacement is None:
+                    return ImportOutcome(pdf, "skipped", "manual lookup abandoned")
+                match = replacement
 
     # 5. Place file on disk according to the configured template + mode.
     rel_path = paths.render_template(

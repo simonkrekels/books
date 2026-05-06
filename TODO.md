@@ -1,0 +1,19 @@
+# TODO 
+- Tags:
+    - allow users to create tags/folders/categories for their pdfs to be stored in. E.g. `stat. mech.`, `textbooks`
+    - allow search/list to be confined to certain tags
+    - Files can have multiple tags
+- Import:
+    - Add (R)etry option for when arxiv/openbooks fetch fails or times out
+    - Fall back to pdf metadata when no match is found -> (U)se as is
+    - Add (E)nter manually option to allow manual entry of Title/Author/Year/etc if missing.
+    - Check for duplicates before importing. Warn the user and ask for confirmation.
+- Implement hybrid search (cosine + BM25) to determine relevancy rankings
+    - Consider using a cross-encoder for the final rankings
+- Group `book search` results by pdf file
+    - rank pdf files by total relevance score per file
+    - option to view chunks of one of the files (and open the file at the page?) \[INTERACTIVE?\]
+- BibTeX export
+    - Maybe as a plugin
+    - `book bibtex` command that adds a certain item to a bibfile
+    - e.g. `book bibtex refs.bib $ID` to add a single item by ID or `book bibtex refs.bib $tag` to add all tagged items. 

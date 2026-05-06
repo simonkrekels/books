@@ -1,5 +1,7 @@
 """``book search`` — semantic search across indexed PDFs."""
 
+from collections import defaultdict
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -12,16 +14,15 @@ console = Console()
 
 def run(
     query: str = typer.Argument(..., help="Free-text search query."),
-    k: int = typer.Option(5, "-k", "--top-k", help="Number of results."),
+    k: int = typer.Option(5, "-k", "--top-k", help="Number of results (papers when grouped, chunks otherwise)."),
+    group: bool = typer.Option(True, "--group/--no-group", help="Group chunks by paper (default: on)."),
 ) -> None:
-    """Embed the query, fetch top-k chunks from Chroma, render bibliography + snippet.
+    """Embed the query, fetch top-k chunks from Chroma, render results.
 
-    Bibliographic info (title, authors, year) is read from SQLite at print
-    time so the displayed metadata is always fresh, even if the indexed
-    chunk metadata is stale.
+    With ``--group`` (the default), chunks are aggregated by paper and ranked
+    by best chunk score — one panel per paper. With ``--no-group``, one panel
+    per chunk is shown (the original behaviour).
     """
-    # Lazy imports here; this command is the only path on which the user
-    # explicitly accepts loading torch / chromadb at startup.
     from books.index.chroma import ChromaIndex
     from books.index.indexer import get_embedder
 
@@ -33,7 +34,10 @@ def run(
         console.print("[yellow]no chunks indexed yet[/yellow] — try `book reindex --all`")
         raise typer.Exit(code=1)
 
-    res = index.query(query_embedding=query_vec, n_results=k)
+    # Fetch more chunks than needed when grouping, to ensure we surface k
+    # distinct papers even if one paper dominates the raw top results.
+    fetch_n = k * 5 if group else k
+    res = index.query(query_embedding=query_vec, n_results=fetch_n)
     # Chroma returns lists-of-lists (one inner list per query vector); we
     # always submit exactly one, so unwrap.
     docs = res["documents"][0]
@@ -45,36 +49,85 @@ def run(
         raise typer.Exit(code=1)
 
     with db.connect() as conn:
-        for doc, meta, dist in zip(docs, metas, distances):
-            paper_id = int(meta["paper_id"])
-            row = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
-            authors = db.get_authors(conn, paper_id) if row else []
-            title = (row["title"] if row else meta.get("title", "")) or ""
-            year = row["year"] if row else None
-            author_str = ", ".join(a["family_name"] for a in authors[:3]) or "[unknown]"
+        if group:
+            _render_grouped(conn, query, docs, metas, distances, k)
+        else:
+            _render_flat(conn, query, docs, metas, distances)
 
-            header = Text()
-            header.append(f"id={paper_id}  ", style="dim")
-            header.append(f"page {meta['page']}  ", style="cyan")
-            # Cosine *distance* → cosine *similarity* (= 1 - distance) reads
-            # more intuitively for users (higher = more similar).
-            header.append(f"score {1 - dist:.3f}", style="green")
 
-            body = Text()
-            body.append(f"{author_str} ({year or '?'})\n", style="bold")
-            body.append(f"{title}\n", style="italic")
-            body.append("\n")
+def _render_grouped(conn, query: str, docs, metas, distances, k: int) -> None:
+    """One panel per paper, showing all matching chunks; ranked by best score."""
+    # Accumulate per-paper data keyed by paper_id.
+    groups: dict[int, dict] = defaultdict(lambda: {"chunks": [], "best_score": 0.0, "row": None, "authors": []})
+
+    for doc, meta, dist in zip(docs, metas, distances):
+        paper_id = int(meta["paper_id"])
+        score = 1 - dist
+        g = groups[paper_id]
+        g["chunks"].append((int(meta["page"]), doc, score))
+        if score > g["best_score"]:
+            g["best_score"] = score
+
+    # Fetch DB rows once per unique paper.
+    for paper_id, g in groups.items():
+        row = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        g["row"] = row
+        g["authors"] = db.get_authors(conn, paper_id) if row else []
+
+    # Sort groups by best score and take top k.
+    ranked = sorted(groups.items(), key=lambda kv: kv[1]["best_score"], reverse=True)[:k]
+
+    for paper_id, g in ranked:
+        row = g["row"]
+        authors = g["authors"]
+        title = (row["title"] if row else "") or ""
+        year = row["year"] if row else None
+        author_str = ", ".join(a["family_name"] for a in authors[:3]) or "[unknown]"
+
+        header = Text()
+        header.append(f"id={paper_id}  ", style="dim")
+        header.append(f"score {g['best_score']:.3f}", style="green")
+
+        body = Text()
+        body.append(f"{author_str} ({year or '?'})\n", style="bold")
+        body.append(f"{title}\n", style="italic")
+
+        # Sort chunks within this paper by page number.
+        for page, doc, score in sorted(g["chunks"], key=lambda t: t[0]):
+            body.append(f"\n[page {page}  score {score:.3f}]\n", style="cyan")
             body.append(_snippet(doc, query))
 
-            console.print(Panel(body, title=header, border_style="blue"))
+        console.print(Panel(body, title=header, border_style="blue"))
+
+
+def _render_flat(conn, query: str, docs, metas, distances) -> None:
+    """Original per-chunk rendering, one panel per result."""
+    for doc, meta, dist in zip(docs, metas, distances):
+        paper_id = int(meta["paper_id"])
+        row = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        authors = db.get_authors(conn, paper_id) if row else []
+        title = (row["title"] if row else meta.get("title", "")) or ""
+        year = row["year"] if row else None
+        author_str = ", ".join(a["family_name"] for a in authors[:3]) or "[unknown]"
+
+        header = Text()
+        header.append(f"id={paper_id}  ", style="dim")
+        header.append(f"page {meta['page']}  ", style="cyan")
+        header.append(f"score {1 - dist:.3f}", style="green")
+
+        body = Text()
+        body.append(f"{author_str} ({year or '?'})\n", style="bold")
+        body.append(f"{title}\n", style="italic")
+        body.append("\n")
+        body.append(_snippet(doc, query))
+
+        console.print(Panel(body, title=header, border_style="blue"))
 
 
 def _snippet(doc: str, query: str, max_len: int = 600) -> Text:
     """Return a query-centred snippet with the query terms bold-highlighted."""
     text = " ".join(doc.split())  # collapse whitespace from PDF extraction
     if len(text) > max_len:
-        # Try to centre the snippet on the first query term we can find;
-        # fall back to a leading window if no term matches.
         lower = text.lower()
         pos = -1
         for term in query.lower().split():

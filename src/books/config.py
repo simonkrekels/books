@@ -90,3 +90,11 @@ def embedder_offline() -> bool:
 def hybrid_search() -> bool:
     """If true, fuse BM25 (FTS5) with cosine similarity at search time."""
     return bool(config["index"]["hybrid"].get(bool))
+
+
+def query_prompt() -> str:
+    """Instruction prefix prepended to queries before embedding (not to indexed chunks).
+
+    BGE models require this for asymmetric retrieval; set to "" to disable.
+    """
+    return config["index"]["query_prompt"].as_str()

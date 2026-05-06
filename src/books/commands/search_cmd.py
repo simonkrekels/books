@@ -48,7 +48,8 @@ def run(
     from books.index.indexer import get_embedder
 
     embedder = get_embedder()
-    [query_vec] = embedder.embed([query])
+    prompt = config.query_prompt()
+    [query_vec] = embedder.embed([prompt + query if prompt else query])
 
     index = ChromaIndex(config.chroma_dir())
     if index.count() == 0:

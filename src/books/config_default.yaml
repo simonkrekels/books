@@ -22,3 +22,7 @@ index:
   # (run once with offline:false to download, then flip this on).
   offline: false
   hybrid: true              # fuse BM25 (SQLite FTS5) with cosine search
+  # Instruction prefix prepended to queries at search time (not at index time).
+  # BGE models are trained for asymmetric retrieval and need this prefix on
+  # queries; leave empty ("") for models that don't use a prompt.
+  query_prompt: "Represent this sentence for searching relevant passages: "

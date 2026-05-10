@@ -32,6 +32,10 @@ def run(
     query: str = typer.Argument(..., help="Free-text search query."),
     k: int = typer.Option(5, "-k", "--top-k", help="Number of results (papers when grouped, chunks otherwise)."),
     group: bool = typer.Option(True, "--group/--no-group", help="Group chunks by paper (default: on)."),
+    author: str | None = typer.Option(None, "--author", help="Filter by author family name (substring)."),
+    tag: str | None = typer.Option(None, "--tag", help="Filter by tag."),
+    year_min: int | None = typer.Option(None, "--year-min", help="Minimum publication year (inclusive)."),
+    year_max: int | None = typer.Option(None, "--year-max", help="Maximum publication year (inclusive)."),
 ) -> None:
     """Embed the query, fetch top-k results from the index, render results.
 
@@ -43,6 +47,9 @@ def run(
     and cosine scores are fused via Reciprocal Rank Fusion for better recall on
     exact-term queries.  Falls back to cosine-only with a warning if the index
     is empty.
+
+    Use ``--author``, ``--tag``, ``--year-min``, and ``--year-max`` to restrict
+    results to a subset of the library before searching.
     """
     from books.index.chroma import ChromaIndex
     from books.index.indexer import get_embedder
@@ -60,15 +67,23 @@ def run(
 
     with db.connect() as conn:
         from books.index import fts as fts_index
+        from books.query import resolve_paper_ids
+
+        allowed_ids = resolve_paper_ids(
+            conn, author=author, tag=tag, year_min=year_min, year_max=year_max
+        )
+        if allowed_ids is not None and not allowed_ids:
+            console.print("[yellow]no papers match the given filters[/yellow]")
+            raise typer.Exit(code=1)
 
         if config.hybrid_search() and fts_index.has_content(conn):
-            results = _hybrid_search(conn, index, query_vec, query, fetch_n)
+            results = _hybrid_search(conn, index, query_vec, query, fetch_n, allowed_ids)
         else:
             if config.hybrid_search():
                 console.print(
                     "[yellow]BM25 index empty[/yellow] — run `book reindex --all` to enable hybrid search"
                 )
-            results = _cosine_search(index, query_vec, fetch_n)
+            results = _cosine_search(index, query_vec, fetch_n, allowed_ids)
 
         if not results:
             console.print("[dim]no matches[/dim]")
@@ -85,9 +100,17 @@ def run(
 # ---------------------------------------------------------------------------
 
 
-def _cosine_search(index, query_vec: list[float], n: int) -> list[SearchResult]:
+def _cosine_search(
+    index, query_vec: list[float], n: int, allowed_ids: set[int] | None = None
+) -> list[SearchResult]:
     """Return up to *n* chunks ranked by cosine similarity."""
-    res = index.query(query_embedding=query_vec, n_results=n)
+    where: dict | None = None
+    if allowed_ids is not None:
+        if len(allowed_ids) == 1:
+            where = {"paper_id": next(iter(allowed_ids))}
+        else:
+            where = {"paper_id": {"$in": list(allowed_ids)}}
+    res = index.query(query_embedding=query_vec, n_results=n, where=where)
     docs = res["documents"][0]
     metas = res["metadatas"][0]
     distances = res["distances"][0]
@@ -109,12 +132,13 @@ def _hybrid_search(
     query_vec: list[float],
     query_text: str,
     n: int,
+    allowed_ids: set[int] | None = None,
 ) -> list[SearchResult]:
     """Fuse cosine + BM25 results with Reciprocal Rank Fusion."""
     from books.index import fts as fts_index
 
-    cosine_hits = _cosine_search(index, query_vec, n)
-    bm25_hits = fts_index.search(conn, query_text, n)
+    cosine_hits = _cosine_search(index, query_vec, n, allowed_ids)
+    bm25_hits = fts_index.search(conn, query_text, n, allowed_ids)
 
     cosine_ranked = [(f"{r.paper_id}:{r.chunk_index}", r.score) for r in cosine_hits]
     fused = fts_index.rrf_fuse([cosine_ranked, bm25_hits])

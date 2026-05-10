@@ -85,6 +85,29 @@ def test_search_returns_empty_on_blank_query(tmp_db: Path):
     assert results == []
 
 
+def test_search_allowed_ids_filters_results(tmp_db: Path):
+    paper_a = _paper(tmp_db, doi="10.1/a")
+    paper_b = _paper(tmp_db, doi="10.1/b")
+    chunks_a = [_Chunk(0, 1, "entropy in thermodynamics")]
+    chunks_b = [_Chunk(0, 1, "entropy and information theory")]
+    with db.connect(tmp_db) as conn:
+        fts_index.upsert_paper(conn, paper_a, chunks_a)
+        fts_index.upsert_paper(conn, paper_b, chunks_b)
+        results_all = fts_index.search(conn, "entropy", 5)
+        results_filtered = fts_index.search(conn, "entropy", 5, allowed_ids={paper_a})
+    assert len(results_all) == 2
+    assert len(results_filtered) == 1
+    assert results_filtered[0][0] == f"{paper_a}:0"
+
+
+def test_search_allowed_ids_empty_set_returns_nothing(tmp_db: Path):
+    paper_id = _paper(tmp_db)
+    with db.connect(tmp_db) as conn:
+        fts_index.upsert_paper(conn, paper_id, [_Chunk(0, 1, "entropy")])
+        results = fts_index.search(conn, "entropy", 5, allowed_ids=set())
+    assert results == []
+
+
 def test_search_scores_order(tmp_db: Path):
     paper_id = _paper(tmp_db)
     chunks = [

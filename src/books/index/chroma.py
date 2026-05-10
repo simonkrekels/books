@@ -82,17 +82,31 @@ class ChromaIndex:
         *,
         query_embedding: list[float],
         n_results: int = 5,
+        where: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run a single-vector nearest-neighbour search.
 
         Returns Chroma's raw response shape: ``{ids, documents, metadatas,
         distances, embeddings}``, each a list of lists (one entry per query
         vector — we always pass exactly one).
+
+        ``where`` is passed directly to Chroma as a metadata filter
+        (e.g. ``{"paper_id": {"$in": [1, 2, 3]}}``).  If the filter
+        reduces the result set below ``n_results``, Chroma raises; the
+        exception is caught here and an empty result is returned.
         """
-        return self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results,
-        )
+        kwargs: dict[str, Any] = {}
+        if where:
+            kwargs["where"] = where
+        try:
+            return self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                **kwargs,
+            )
+        except Exception:
+            # Chroma raises when n_results exceeds the filtered collection size.
+            return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
 
     def count(self) -> int:
         """Number of chunks currently stored in the index."""

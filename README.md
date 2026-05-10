@@ -32,8 +32,8 @@ Reference managers want to be the centre of your workflow. `book` does the oppos
 
 - **Import once, lookup automatic.** Sniffs DOI / arXiv ID / ISBN out of the PDF (metadata fields, front matter, and back matter — weighted so a body-cited DOI doesn't masquerade as the paper's own) and resolves it via Crossref, arXiv, or Open Library.
 - **Files where you want them.** A `str.format` path template — `{author_last}/{year}/{title_slug}.pdf` by default — drives the on-disk layout. Move, copy, or symlink.
-- **Full-text semantic search.** Every imported PDF is chunked, embedded with `BAAI/bge-small-en-v1.5`, and stored in a persistent Chroma index. `book search "your query"` returns ranked snippets with page numbers.
-- **SQLite is the source of truth.** The vector index is a derived artefact: blow it away and `book reindex --all` rebuilds it from the PDFs.
+- **Hybrid search.** Every imported PDF is chunked and stored in SQLite (`chunks` table) for BM25 full-text search via FTS5, and embedded with `BAAI/bge-small-en-v1.5` in Chroma for semantic search. `book search "your query"` fuses both rankings with Reciprocal Rank Fusion (RRF) for better recall on exact-term and paraphrase queries alike.
+- **SQLite is the source of truth.** The `chunks` table holds all chunk text and drives BM25 search. The Chroma vector index is a derived artefact: blow it away and `book reindex --all` rebuilds it from the PDFs.
 - **Offline-friendly.** Flip `index.offline: true` and the embedder loads from local cache only — no Hugging Face round-trips, no progress-bar noise.
 - **Single binary feel.** One `book` command, six subcommands, no daemon, no plugin host.
 
@@ -84,7 +84,7 @@ uv run book reindex --all
 | `book ls`          | List with flags (`--author`, `--year`, `--journal`, `--tag`, `--doi`, `--isbn`) and free positional terms (LIKE-search title/abstract). |
 | `book show`        | Pretty-print a single paper's full metadata.                                 |
 | `book rm`          | Remove from the library. `--keep-file` is the default; pass `--delete-file` to also delete the PDF. |
-| `book search`      | Embed a query, return top-`k` chunks across the index with page + snippet.   |
+| `book search`      | Hybrid BM25 + cosine search fused with RRF; returns top-`k` results with page + snippet. |
 | `book reindex`     | Rebuild the vector index for `--all`, specific papers, or anything flagged `needs_reindex=1`. |
 
 ### Useful flags
@@ -94,6 +94,7 @@ book import --copy      paper.pdf      # default is move; --copy preserves the o
 book import --quiet     papers/        # auto-accept top match for every PDF
 book ls quantum --year 2024            # combine positional title-match + flag
 book search "..." -k 10                # tune the result count
+book search "..." --no-group           # one panel per chunk instead of per paper
 ```
 
 ## Configuration
@@ -119,6 +120,8 @@ index:
   chunk_overlap: 64
   device: cpu                                          # cpu | mps | cuda
   offline: false                                       # flip true to skip every HF Hub call
+  hybrid: true                                         # fuse BM25 (SQLite FTS5) with cosine search via RRF
+  query_prompt: "Represent this sentence for searching relevant passages: "  # BGE asymmetric retrieval prefix
 ```
 
 Available template keys: `{author_last}`, `{author_last_first}`, `{year}`, `{title_slug}`, `{doi_slug}`, `{journal_slug}`. All resolve `~` and env vars.
@@ -143,10 +146,17 @@ PDF --> | pdf_meta  | -----> | Crossref /    | -----> | PaperMatch    |
                           | needs_reindex=0/1
                           v
               +-----------+----------+        +--------------+
-              | extract -> chunk ->  | -----> | Chroma       |
-              | embed (sentence-     |        | persistent   |
-              | transformers)        |        | collection   |
-              +----------------------+        +--------------+
+              | extract -> chunk ->  | -----> | SQLite       |
+              | embed (sentence-     |        | chunks +     |
+              | transformers)        |        | chunks_fts   |
+              +----------------------+        +------+-------+
+                                                     |
+                                              embed  v
+                                             +--------------+
+                                             | Chroma       |
+                                             | persistent   |
+                                             | collection   |
+                                             +--------------+
 ```
 
 A few decisions worth flagging:
@@ -155,6 +165,7 @@ A few decisions worth flagging:
 - **ISBN reach.** ISBN-labelled hits on the colophon page (often page 5 or 6 of a textbook) are picked up by scanning pages 0..5 plus the last page; bare 13-digit numbers require a label nearby to avoid false positives.
 - **Migrations are additive and idempotent.** `connect()` always runs `init_db()`; new columns + partial unique indexes are applied with `ALTER TABLE` on existing databases.
 - **Chroma never gates the import.** If embedding fails, the SQLite row commits with `needs_reindex=1` so you can fix it with `book reindex` later.
+- **Hybrid search with RRF.** `book search` fetches candidates from both BM25 (SQLite FTS5) and cosine similarity (Chroma), then merges them with Reciprocal Rank Fusion. If the FTS5 index is empty, it falls back to cosine-only with a warning. Disable with `index.hybrid: false`.
 
 ## Project layout
 
@@ -180,6 +191,7 @@ src/books/
     chunker.py          semantic-text-splitter wrapper
     embedder.py         Embedder Protocol + sentence-transformers impl
     chroma.py           PersistentClient wrapper
+    fts.py              SQLite FTS5 BM25 index helpers + RRF fusion
     indexer.py          orchestration + lazy embedder singleton
 tests/                  pytest suite (48 tests, runs in <2s)
 ```
@@ -198,7 +210,7 @@ The test suite covers the query parser, path templating, the database layer, the
 ## Roadmap
 
 - [x] **Phase 1.** SQLite library + interactive importer + Crossref / arXiv / Open Library lookup.
-- [x] **Phase 2.** Chunk + embed + persistent Chroma + `book search`.
+- [x] **Phase 2.** Chunk + embed + persistent Chroma + `book search` (hybrid BM25 + cosine via RRF).
 - [ ] **Phase 3.** Local / API RAG over the index (`book ask "..."`).
 - [ ] Beets-style `field:value` query tokens.
 - [ ] Plugin entry-points for custom metadata sources.
@@ -215,6 +227,7 @@ The test suite covers the query parser, path templating, the database layer, the
 | Chunking               | [semantic-text-splitter](https://github.com/benbrandt/text-splitter)               |
 | Embeddings             | [sentence-transformers](https://www.sbert.net/) · `BAAI/bge-small-en-v1.5`         |
 | Vector store           | [Chroma](https://www.trychroma.com/) (`PersistentClient`)                          |
+| Full-text search       | SQLite FTS5 (BM25) via stdlib `sqlite3`                                            |
 | Storage                | SQLite (stdlib `sqlite3`)                                                          |
 | Packaging / venv       | [uv](https://github.com/astral-sh/uv) + [hatchling](https://hatch.pypa.io/)        |
 

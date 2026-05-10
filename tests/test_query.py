@@ -93,3 +93,60 @@ def test_order_year_desc(populated_db: Path):
     with db.connect(populated_db) as conn:
         rows = list(conn.execute(sql, params))
     assert [r["year"] for r in rows] == [2024, 2019, 1924]
+
+
+# ---------------------------------------------------------------------------
+# resolve_paper_ids
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_no_filters_returns_none(populated_db: Path):
+    with db.connect(populated_db) as conn:
+        assert query.resolve_paper_ids(conn) is None
+
+
+def test_resolve_by_author(populated_db: Path):
+    with db.connect(populated_db) as conn:
+        ids = query.resolve_paper_ids(conn, author="Smith")
+        all_rows = list(conn.execute("SELECT id, title FROM papers"))
+    smith_ids = {r["id"] for r in all_rows if "Smith" in r["title"] or True}
+    # Both Smith papers should be present; de Broglie should not
+    de_broglie_id = next(r["id"] for r in all_rows if "Quanta" in r["title"])
+    assert de_broglie_id not in ids
+    assert len(ids) == 2
+
+
+def test_resolve_by_tag(populated_db: Path):
+    with db.connect(populated_db) as conn:
+        ids = query.resolve_paper_ids(conn, tag="textbook")
+        textbook_id = conn.execute(
+            "SELECT p.id FROM papers p JOIN tags t ON t.paper_id = p.id WHERE t.tag = 'textbook'"
+        ).fetchone()["id"]
+    assert ids == {textbook_id}
+
+
+def test_resolve_year_min(populated_db: Path):
+    with db.connect(populated_db) as conn:
+        ids = query.resolve_paper_ids(conn, year_min=2000)
+        all_rows = list(conn.execute("SELECT id, year FROM papers"))
+    assert ids == {r["id"] for r in all_rows if r["year"] and r["year"] >= 2000}
+
+
+def test_resolve_year_max(populated_db: Path):
+    with db.connect(populated_db) as conn:
+        ids = query.resolve_paper_ids(conn, year_max=2000)
+        all_rows = list(conn.execute("SELECT id, year FROM papers"))
+    assert ids == {r["id"] for r in all_rows if r["year"] and r["year"] <= 2000}
+
+
+def test_resolve_year_range(populated_db: Path):
+    with db.connect(populated_db) as conn:
+        ids = query.resolve_paper_ids(conn, year_min=2019, year_max=2019)
+        row = conn.execute("SELECT id FROM papers WHERE year = 2019").fetchone()
+    assert ids == {row["id"]}
+
+
+def test_resolve_no_match_returns_empty_set(populated_db: Path):
+    with db.connect(populated_db) as conn:
+        ids = query.resolve_paper_ids(conn, author="Nonexistent")
+    assert ids == set()

@@ -67,7 +67,10 @@ def rebuild(conn: sqlite3.Connection) -> None:
 
 
 def search(
-    conn: sqlite3.Connection, query: str, n: int
+    conn: sqlite3.Connection,
+    query: str,
+    n: int,
+    allowed_ids: set[int] | None = None,
 ) -> list[tuple[str, float]]:
     """Return up to *n* BM25-ranked chunks matching *query*.
 
@@ -75,21 +78,34 @@ def search(
     Chroma-compatible ``"{paper_id}:{chunk_index}"`` format and ``score`` is
     a positive float (higher = more relevant).  Returns ``[]`` when the index
     is empty or the query contains no usable terms.
+
+    ``allowed_ids``, if given, restricts results to chunks whose paper_id is
+    in the set.  An empty set always returns ``[]``.
     """
     fts_query = _build_fts_query(query)
     if not fts_query:
         return []
+    if allowed_ids is not None and not allowed_ids:
+        return []
+
+    id_clause = ""
+    extra_params: list = []
+    if allowed_ids is not None:
+        placeholders = ",".join("?" * len(allowed_ids))
+        id_clause = f"AND c.paper_id IN ({placeholders})"
+        extra_params = list(allowed_ids)
+
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT c.paper_id, c.chunk_index, bm25(chunks_fts) AS bm25_score
             FROM chunks_fts
             JOIN chunks c ON c.id = chunks_fts.rowid
-            WHERE chunks_fts MATCH ?
+            WHERE chunks_fts MATCH ? {id_clause}
             ORDER BY bm25_score          -- bm25() is negative; lower = better
             LIMIT ?
             """,
-            (fts_query, n),
+            [fts_query, *extra_params, n],
         ).fetchall()
     except sqlite3.OperationalError:
         # Malformed query or empty index — degrade silently.

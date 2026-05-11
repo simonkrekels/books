@@ -5,6 +5,7 @@ import typer
 
 from books.commands import (
     bibtex_cmd,
+    dupes_cmd,
     import_cmd,
     ls_cmd,
     reindex_cmd,
@@ -23,6 +24,7 @@ app = typer.Typer(
 
 # Each command module exposes a `run` callable; Typer turns it into a subcommand.
 app.command("import")(import_cmd.run)
+app.command("dupes")(dupes_cmd.run)
 app.command("ls")(ls_cmd.run)
 app.command("show")(show_cmd.run)
 app.command("rm")(rm_cmd.run)

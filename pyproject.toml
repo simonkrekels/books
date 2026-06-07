@@ -5,9 +5,11 @@ description = "CLI bibliography manager: import PDFs, look up metadata via Cross
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "anthropic>=0.40",
     "chromadb>=1.5.9",
     "confuse>=2.2.0",
     "httpx>=0.28.1",
+    "openai>=1.50",
     "pydantic>=2.13.3",
     "pymupdf>=1.27.2.3",
     "rich>=15.0.0",
@@ -15,6 +17,11 @@ dependencies = [
     "sentence-transformers>=5.4.1",
     "typer>=0.25.1",
 ]
+
+[project.optional-dependencies]
+# In-process local LLM backend for `book ask` (provider: local). Heavy native
+# build; install on demand with `uv sync --extra local`.
+local = ["llama-cpp-python>=0.3"]
 
 [project.scripts]
 book = "books.cli:app"

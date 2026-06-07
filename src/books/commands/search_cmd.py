@@ -1,7 +1,6 @@
 """``book search`` — semantic search across indexed PDFs."""
 
 from collections import defaultdict
-from dataclasses import dataclass
 
 import typer
 from rich.console import Console
@@ -9,23 +8,13 @@ from rich.panel import Panel
 from rich.text import Text
 
 from books import config, db
+from books.retrieval import RetrievalUnavailable, SearchResult, retrieve
 
 console = Console()
 
 # Number of candidate results fetched from each source before fusion.
 # Larger windows improve recall at the cost of extra FTS/Chroma work.
 _FETCH_MULTIPLIER = 5
-
-
-@dataclass
-class SearchResult:
-    """A single chunk result, normalized from either Chroma or FTS5."""
-
-    paper_id: int
-    chunk_index: int
-    page: int
-    text: str
-    score: float  # cosine similarity, negated-BM25, or RRF score
 
 
 def run(
@@ -51,24 +40,12 @@ def run(
     Use ``--author``, ``--tag``, ``--year-min``, and ``--year-max`` to restrict
     results to a subset of the library before searching.
     """
-    from books.index.chroma import ChromaIndex
-    from books.index.indexer import get_embedder
-
-    embedder = get_embedder()
-    prompt = config.query_prompt()
-    [query_vec] = embedder.embed([prompt + query if prompt else query])
-
-    index = ChromaIndex(config.chroma_dir())
-    if index.count() == 0:
-        console.print("[yellow]no chunks indexed yet[/yellow] — try `book reindex --all`")
-        raise typer.Exit(code=1)
+    from books.index import fts as fts_index
+    from books.query import resolve_paper_ids
 
     fetch_n = k * _FETCH_MULTIPLIER
 
     with db.connect() as conn:
-        from books.index import fts as fts_index
-        from books.query import resolve_paper_ids
-
         allowed_ids = resolve_paper_ids(
             conn, author=author, tag=tag, year_min=year_min, year_max=year_max
         )
@@ -76,14 +53,16 @@ def run(
             console.print("[yellow]no papers match the given filters[/yellow]")
             raise typer.Exit(code=1)
 
-        if config.hybrid_search() and fts_index.has_content(conn):
-            results = _hybrid_search(conn, index, query_vec, query, fetch_n, allowed_ids)
-        else:
-            if config.hybrid_search():
-                console.print(
-                    "[yellow]BM25 index empty[/yellow] — run `book reindex --all` to enable hybrid search"
-                )
-            results = _cosine_search(index, query_vec, fetch_n, allowed_ids)
+        if config.hybrid_search() and not fts_index.has_content(conn):
+            console.print(
+                "[yellow]BM25 index empty[/yellow] — run `book reindex --all` to enable hybrid search"
+            )
+
+        try:
+            results = retrieve(conn, query, fetch_n, allowed_ids=allowed_ids)
+        except RetrievalUnavailable:
+            console.print("[yellow]no chunks indexed yet[/yellow] — try `book reindex --all`")
+            raise typer.Exit(code=1)
 
         if not results:
             console.print("[dim]no matches[/dim]")
@@ -93,76 +72,6 @@ def run(
             _render_grouped(conn, query, results, k)
         else:
             _render_flat(conn, query, results[:k])
-
-
-# ---------------------------------------------------------------------------
-# Search backends
-# ---------------------------------------------------------------------------
-
-
-def _cosine_search(
-    index, query_vec: list[float], n: int, allowed_ids: set[int] | None = None
-) -> list[SearchResult]:
-    """Return up to *n* chunks ranked by cosine similarity."""
-    where: dict | None = None
-    if allowed_ids is not None:
-        if len(allowed_ids) == 1:
-            where = {"paper_id": next(iter(allowed_ids))}
-        else:
-            where = {"paper_id": {"$in": list(allowed_ids)}}
-    res = index.query(query_embedding=query_vec, n_results=n, where=where)
-    docs = res["documents"][0]
-    metas = res["metadatas"][0]
-    distances = res["distances"][0]
-    return [
-        SearchResult(
-            paper_id=int(meta["paper_id"]),
-            chunk_index=int(meta["chunk_index"]),
-            page=int(meta["page"]),
-            text=doc,
-            score=1.0 - dist,
-        )
-        for doc, meta, dist in zip(docs, metas, distances)
-    ]
-
-
-def _hybrid_search(
-    conn,
-    index,
-    query_vec: list[float],
-    query_text: str,
-    n: int,
-    allowed_ids: set[int] | None = None,
-) -> list[SearchResult]:
-    """Fuse cosine + BM25 results with Reciprocal Rank Fusion."""
-    from books.index import fts as fts_index
-
-    cosine_hits = _cosine_search(index, query_vec, n, allowed_ids)
-    bm25_hits = fts_index.search(conn, query_text, n, allowed_ids)
-
-    cosine_ranked = [(f"{r.paper_id}:{r.chunk_index}", r.score) for r in cosine_hits]
-    fused = fts_index.rrf_fuse([cosine_ranked, bm25_hits])
-
-    # Look up text + page for each fused chunk from the SQLite chunks table.
-    results: list[SearchResult] = []
-    for chunk_id, rrf_score in fused[:n]:
-        paper_id, chunk_index = map(int, chunk_id.split(":"))
-        row = conn.execute(
-            "SELECT page, text FROM chunks WHERE paper_id = ? AND chunk_index = ?",
-            (paper_id, chunk_index),
-        ).fetchone()
-        if row is None:
-            continue
-        results.append(
-            SearchResult(
-                paper_id=paper_id,
-                chunk_index=chunk_index,
-                page=row["page"],
-                text=row["text"],
-                score=rrf_score,
-            )
-        )
-    return results
 
 
 # ---------------------------------------------------------------------------

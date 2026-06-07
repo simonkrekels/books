@@ -98,3 +98,68 @@ def query_prompt() -> str:
     BGE models require this for asymmetric retrieval; set to "" to disable.
     """
     return config["index"]["query_prompt"].as_str()
+
+
+# ---------------------------------------------------------------------------
+# RAG (`book ask`)
+# ---------------------------------------------------------------------------
+
+
+def rag_provider() -> str:
+    """LLM backend for ``book ask``: ``anthropic``, ``openai``, or ``local``."""
+    provider = config["rag"]["provider"].as_str()
+    if provider not in ("anthropic", "openai", "local"):
+        raise ValueError(
+            f"rag.provider must be anthropic/openai/local, got: {provider!r}"
+        )
+    return provider
+
+
+def rag_model() -> str:
+    """Model identifier passed to the API provider (ignored by the local backend)."""
+    return config["rag"]["model"].as_str()
+
+
+def rag_context_budget() -> int:
+    """Max tokens of retrieved chunk text to pack into the prompt."""
+    return int(config["rag"]["context_budget"].as_number())
+
+
+def rag_max_chunks() -> int:
+    """Hard cap on the number of chunks fed to the model."""
+    return int(config["rag"]["max_chunks"].as_number())
+
+
+def rag_temperature() -> float:
+    """Sampling temperature for the LLM."""
+    return float(config["rag"]["temperature"].as_number())
+
+
+def rag_reserve_output() -> int:
+    """Tokens reserved for the model's answer (sets local n_ctx headroom)."""
+    return int(config["rag"]["reserve_output"].as_number())
+
+
+def rag_system_prompt() -> str:
+    """User override for the system prompt; empty string means use the default."""
+    return config["rag"]["system_prompt"].as_str()
+
+
+def rag_api_key_env() -> str:
+    """Name of the environment variable holding the provider API key."""
+    return config["rag"]["api_key_env"].as_str()
+
+
+def rag_base_url() -> str:
+    """Override base URL for API providers; empty string means provider default."""
+    return config["rag"]["base_url"].as_str()
+
+
+def rag_model_path() -> str:
+    """Filesystem path to the local ``.gguf`` model (``local`` provider only)."""
+    return config["rag"]["model_path"].as_str()
+
+
+def rag_n_ctx() -> int:
+    """Context window size for the local model (``local`` provider only)."""
+    return int(config["rag"]["n_ctx"].as_number())

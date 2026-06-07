@@ -26,3 +26,24 @@ index:
   # BGE models are trained for asymmetric retrieval and need this prefix on
   # queries; leave empty ("") for models that don't use a prompt.
   query_prompt: "Represent this sentence for searching relevant passages: "
+
+# Retrieval-augmented generation for `book ask`: retrieve chunks, pack them into
+# a token budget, and synthesize a cited answer with the chosen LLM.
+rag:
+  provider: anthropic            # anthropic | openai | local
+  model: claude-sonnet-4-6
+  # Token budget for retrieved chunks fed to the model. Size this to the model's
+  # context window: chunks are packed in rank order until the budget is hit.
+  context_budget: 8000
+  max_chunks: 20                 # hard cap on chunk count regardless of budget
+  temperature: 0.2
+  reserve_output: 1024           # tokens reserved for the answer (local n_ctx headroom)
+  system_prompt: ""              # "" → use the built-in default
+  # --- API providers (anthropic / openai) ---
+  api_key_env: ANTHROPIC_API_KEY # env var holding the API key
+  # "" → provider default. Point an OpenAI-compatible endpoint here to use a
+  # local server, e.g. http://localhost:11434/v1 for Ollama (provider: openai).
+  base_url: ""
+  # --- in-process local provider (provider: local; needs `uv sync --extra local`) ---
+  model_path: ""                 # path to a .gguf model file
+  n_ctx: 8192                    # local model context window
